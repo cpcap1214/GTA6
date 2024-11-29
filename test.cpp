@@ -3,13 +3,15 @@
 #include <cstdlib>  // 為了使用 rand()
 #include <ctime>    // 為了使用 time()
 #include <iostream>  // 添加這行
+#include <filesystem>  // 添加這行
 using namespace sf;
 using namespace std;
 
 // 在檔案開頭定義全域常量
-const float BOUNDARY_LEFT = 400.f;    // 左邊界
+const float BOUNDARY_LEFT = 200.f;    // 左邊界
 const float PLAY_AREA_WIDTH = 800.f;  // 遊戲區域寬度
 const float ENEMY_WIDTH = 30.f;       // 敵人寬度
+const float BOUNDARY_RIGHT = BOUNDARY_LEFT + PLAY_AREA_WIDTH;  // 右邊界
 
 class Bullet {
 public:
@@ -45,19 +47,13 @@ public:
         shape.move(0, speed);
     }
 
-    // 添加碰撞檢測函數
-    bool checkCollision(const CircleShape& player) const {
-        Vector2f enemyCenter = shape.getPosition() + Vector2f(20.f, 20.f);
-        Vector2f playerCenter = player.getPosition() + Vector2f(30.f, 30.f);
+    // 修改碰撞檢測函數以使用 Sprite
+    bool checkCollision(const Sprite& player) const {
+        // 獲取精靈的邊界框
+        FloatRect playerBounds = player.getGlobalBounds();
+        FloatRect enemyBounds = shape.getGlobalBounds();
         
-        // 計算兩個圓心之間的距離
-        float distance = sqrt(
-            pow(enemyCenter.x - playerCenter.x, 2) + 
-            pow(enemyCenter.y - playerCenter.y, 2)
-        );
-        
-        // 如果距離小於兩個圓的半徑之和，則發生碰撞
-        return distance < (20.f + 30.f);  // 敵人半徑 + 玩家半徑
+        return enemyBounds.intersects(playerBounds);
     }
 };
 
@@ -155,14 +151,14 @@ public:
         return enemies;
     }
 
-    // 添加檢測玩家碰撞並處理的方法
-    bool checkPlayerCollision(const sf::CircleShape& playerShape) {
+    // 修改檢測玩家碰撞的方法
+    bool checkPlayerCollision(const Sprite& playerSprite) {
         for (const auto& enemy : enemies) {
-            if (enemy.shape.getGlobalBounds().intersects(playerShape.getGlobalBounds())) {
-                return true;  // 返回 true 表示發生碰撞
+            if (enemy.checkCollision(playerSprite)) {
+                return true;
             }
         }
-        return false;  // 沒有碰撞
+        return false;
     }
 };
 
@@ -170,24 +166,32 @@ int main() {
     RenderWindow window(VideoMode(1200, 800), "SFML works!");
     srand(time(0));  // 初始化隨機數生成器
     
-    // 邊界設置
-    RectangleShape boundary(Vector2f(800.f, 800.f));
-    boundary.setFillColor(Color::Transparent);
-    boundary.setOutlineColor(Color::White);
-    boundary.setOutlineThickness(2.f);
-    boundary.setPosition(200.f, 0.f);
-
-    // 玩家圓形
-    CircleShape shape(30.f);
-    shape.setFillColor(Color::Green);
+    // 加載玩家材質
+    Texture playerTexture;
+    if (!playerTexture.loadFromFile("/Users/cpcap/GTA6/texture/player.png")) {
+        cout << "Error loading player texture!" << endl;
+        cout << "Current working directory: " << filesystem::current_path() << endl;
+        return -1;
+    }
     
-    float x = 600.f - 30.f;
+    // 創建玩家精靈替代原來的 CircleShape
+    Sprite playerSprite(playerTexture);
+    // 設置精靈的原點為中心
+    playerSprite.setOrigin(playerTexture.getSize().x / 2.f, playerTexture.getSize().y / 2.f);
+    
+    float x = BOUNDARY_LEFT + PLAY_AREA_WIDTH/2;  // 在遊戲區域中心
     float y = 740.f;
-    shape.setPosition(x, y);
+    playerSprite.setPosition(x, y);
     
-    float moveSpeed = 0.1f;
-    float leftBound = 200.f;
-    float rightBound = 1000.f - 60.f;
+    // 如果需要縮放精靈到特定大小（例如原來圓形的大小）
+    playerSprite.setScale(
+        60.f / playerTexture.getSize().x,  // 60.f 是原來圓形的直徑
+        60.f / playerTexture.getSize().y
+    );
+    
+    float moveSpeed = 0.5f;
+    float leftBound = BOUNDARY_LEFT;
+    float rightBound = BOUNDARY_LEFT + PLAY_AREA_WIDTH - 60.f;
 
     // 子彈容器
     std::vector<Bullet> bullets;
@@ -276,35 +280,39 @@ int main() {
     const float shootCooldown = 0.5f;  // 射擊冷卻時間（秒）
 
     // 添加敵人生成計時器
-    const float enemySpawnInterval = 2.0f;  // 每2秒生成一個敵人
+    const float enemySpawnInterval = 2.0f;  // 2秒生一個敵人
 
-    // 定義遊戲區域常量
-    const float BOUNDARY_LEFT = 400.f;    // 左邊界
-    const float BOUNDARY_RIGHT = 1000.f;   // 右邊界（絕對不超過1000）
-    const float ENEMY_WIDTH = 30.f;
+    // 在 main 函數開始處，window 創建之後添加邊界定義
+    RectangleShape leftBoundary;
+    RectangleShape rightBoundary;
 
-    std::cout << "遊戲區域設定：" << std::endl;
-    std::cout << "左邊界: " << BOUNDARY_LEFT << std::endl;
-    std::cout << "右邊界: " << BOUNDARY_RIGHT << std::endl;
-    std::cout << "敵人寬度: " << ENEMY_WIDTH << std::endl;
-    std::cout << "------------------------" << std::endl;
+    // 設置邊界的大小
+    leftBoundary.setSize(Vector2f(2.f, 800.f));
+    rightBoundary.setSize(Vector2f(2.f, 800.f));
 
-    // 在字體加載後，添加勝利文本
-    // 創建遊戲勝利文字
+    // 使用正確的常量設置位置
+    leftBoundary.setPosition(BOUNDARY_LEFT, 0.f);                    // x = 200
+    rightBoundary.setPosition(BOUNDARY_LEFT + PLAY_AREA_WIDTH, 0.f); // x = 1000
+
+    // 設置邊界顏色
+    leftBoundary.setFillColor(Color::White);
+    rightBoundary.setFillColor(Color::White);
+
+    // 創建勝利文字
     sf::Text gameWonText;
     gameWonText.setFont(font);
     gameWonText.setString("Victory!");
     gameWonText.setCharacterSize(50);
-    gameWonText.setFillColor(sf::Color::Green);  // 使用綠色表示勝利
-    
+    gameWonText.setFillColor(sf::Color::Green);
+
     // 創建勝利提示文字
     sf::Text victoryPromptText;
     victoryPromptText.setFont(font);
     victoryPromptText.setString("Press R to Play Again or ESC to Quit");
     victoryPromptText.setCharacterSize(30);
     victoryPromptText.setFillColor(sf::Color::White);
-    
-    // 設置文字位置
+
+    // 設置勝利文字位置
     gameWonText.setPosition(
         window.getSize().x/2 - gameWonText.getGlobalBounds().width/2,
         window.getSize().y/2 - gameWonText.getGlobalBounds().height/2 - 50
@@ -340,9 +348,9 @@ int main() {
                     // 修改重置邏輯
                     currentHealth = maxHealth;
                     healthBar.setSize(Vector2f(200.f, 20.f));
-                    x = 600.f - 30.f;
+                    x = BOUNDARY_LEFT + PLAY_AREA_WIDTH/2;  // 在遊戲區域中心
                     y = 740.f;
-                    shape.setPosition(x, y);
+                    playerSprite.setPosition(x, y);
                     game.reset();  // 使用重置方法替代重新創建實例
                     isGameOver = false;
                 }
@@ -374,7 +382,7 @@ int main() {
                     healthBar.setSize(Vector2f(200.f, 20.f));
                     x = 600.f - 30.f;
                     y = 740.f;
-                    shape.setPosition(x, y);
+                    playerSprite.setPosition(x, y);
                     game.reset();
                     killCount = 0;  // 重置擊殺數
                     gameWon = false;
@@ -388,7 +396,7 @@ int main() {
         // 檢測碰撞後的血量檢查
         if (!isInvincible) {
             for (size_t i = 0; i < game.getEnemies().size(); i++) {
-                if (game.getEnemies()[i].checkCollision(shape)) {
+                if (game.getEnemies()[i].checkCollision(playerSprite)) {
                     currentHealth = std::max(0.f, currentHealth - 10.f);
                     healthBar.setSize(Vector2f((currentHealth/maxHealth) * 200.f, 20.f));
                     isInvincible = true;
@@ -408,8 +416,9 @@ int main() {
 
         // 修改遊戲狀態檢查的邏輯
         if (!isGameOver && !gameWon) {  // 確保兩個狀態互斥
-            // 正常遊戲畫面的繪製
-            window.draw(boundary);
+            // 繪製邊界（在繪製其他物件之前）
+            window.draw(leftBoundary);
+            window.draw(rightBoundary);
             
             // 繪製敵人
             for (const auto& enemy : game.getEnemies()) {
@@ -417,7 +426,7 @@ int main() {
             }
             
             // 繪製玩家和子彈
-            window.draw(shape);
+            window.draw(playerSprite);
             for (const auto& bullet : game.getBullets()) {
                 window.draw(bullet.shape);
             }
@@ -438,8 +447,8 @@ int main() {
             if (Keyboard::isKeyPressed(Keyboard::Space)) {
                 if (shootTimer.getElapsedTime().asSeconds() >= shootCooldown) {
                     // 從玩位置發射子彈
-                    game.addBullet(shape.getPosition().x + shape.getRadius(), 
-                                 shape.getPosition().y);
+                    game.addBullet(playerSprite.getPosition().x + playerSprite.getGlobalBounds().width / 2.f, 
+                                 playerSprite.getPosition().y);
                     shootTimer.restart();
                 }
             }
@@ -466,12 +475,12 @@ int main() {
             // 更新遊戲邏輯
             game.updateBullets();
             game.updateEnemies();
-            shape.setPosition(x, y);
+            playerSprite.setPosition(x, y);
 
             // 檢測玩家和敵人的碰撞
             if (!isInvincible) {
-                if (game.checkPlayerCollision(shape)) {
-                    // 只扣血，不移除敵人
+                if (game.checkPlayerCollision(playerSprite)) {
+                    // 只血，不移除敵人
                     currentHealth = std::max(0.f, currentHealth - 10.f);
                     healthBar.setSize(Vector2f((currentHealth/maxHealth) * 200.f, 20.f));
                     isInvincible = true;
