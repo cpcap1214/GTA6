@@ -183,15 +183,21 @@ int main() {
     float y = 740.f;
     playerSprite.setPosition(x, y);
     
-    // 如果需要縮放精靈到特定大小（例如原來圓形的大小）
+    // 在 main 函數中，修改玩家精靈的縮放比例
+    // 將原來的 60.f 改為更大的值，例如 100.f
     playerSprite.setScale(
-        60.f / playerTexture.getSize().x,  // 60.f 是原來圓形的直徑
-        60.f / playerTexture.getSize().y
+        100.f / playerTexture.getSize().x,  // 改為 100.f 使玩家更大
+        100.f / playerTexture.getSize().y   // 保持寬高比例一致
     );
     
-    float moveSpeed = 0.5f;
-    float leftBound = BOUNDARY_LEFT;
-    float rightBound = BOUNDARY_LEFT + PLAY_AREA_WIDTH - 60.f;
+    float moveSpeed = 0.2f;
+
+    // 獲取玩家精靈的實際寬度（考慮縮放後的大小）
+    float playerWidth = playerSprite.getGlobalBounds().width;
+
+    // 設置移動邊界，考慮玩家寬度
+    float leftBound = BOUNDARY_LEFT;                         // 左邊界
+    float rightBound = BOUNDARY_LEFT + PLAY_AREA_WIDTH - playerWidth;  // 右邊界減去玩家寬度
 
     // 子彈容器
     std::vector<Bullet> bullets;
@@ -322,6 +328,10 @@ int main() {
         window.getSize().y/2 + 50
     );
 
+    // 在 main 函數開始處添加自動發射的計時器和間隔設置
+    Clock autoShootTimer;  // 自動發射計時器
+    const float autoShootInterval = 0.5f;  // 每0.5秒發射一次，你可以調整這個值
+
     // 主遊戲循環
     while (window.isOpen())
     {
@@ -437,20 +447,20 @@ int main() {
 
             // 遊戲邏輯更新
             if (Keyboard::isKeyPressed(Keyboard::Left)) {
-                x = std::max(leftBound, x - moveSpeed);
+                x = std::max(leftBound + playerWidth/2.f, x - moveSpeed);  // 考慮中心點偏移
             }
             if (Keyboard::isKeyPressed(Keyboard::Right)) {
-                x = std::min(rightBound, x + moveSpeed);
+                x = std::min(rightBound + playerWidth/2.f, x + moveSpeed);  // 考慮中心點偏移
             }
             
-            // 處理射擊
-            if (Keyboard::isKeyPressed(Keyboard::Space)) {
-                if (shootTimer.getElapsedTime().asSeconds() >= shootCooldown) {
-                    // 從玩位置發射子彈
-                    game.addBullet(playerSprite.getPosition().x + playerSprite.getGlobalBounds().width / 2.f, 
-                                 playerSprite.getPosition().y);
-                    shootTimer.restart();
-                }
+            // 檢查是否到達發射時間
+            if (autoShootTimer.getElapsedTime().asSeconds() >= autoShootInterval) {
+                // 從玩家中心位置發射子彈
+                float bulletX = playerSprite.getPosition().x;
+                float bulletY = playerSprite.getPosition().y - playerSprite.getGlobalBounds().height/2.f;
+                
+                game.addBullet(bulletX, bulletY);
+                autoShootTimer.restart();  // 重置計時器
             }
 
             // 修改敵人生成邏輯
