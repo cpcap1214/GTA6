@@ -4,6 +4,7 @@
 #include <ctime>    // 為了使用 time()
 #include <iostream>  // 添加這行
 #include <filesystem>  // 添加這行
+#include <memory>  // 添加這行
 using namespace sf;
 using namespace std;
 
@@ -57,15 +58,108 @@ public:
     }
 };
 
+class AnimatedBackground {
+private:
+    std::vector<sf::Texture> frames;
+    sf::Sprite sprite;
+    float frameTime;
+    float currentTime;
+    size_t currentFrame;
+    sf::Vector2f scale;
+
+public:
+    AnimatedBackground(const std::vector<std::string>& framePaths, float frameDuration, const sf::Vector2f& windowSize) {
+        frameTime = frameDuration;
+        currentTime = 0.0f;
+        currentFrame = 0;
+
+        // 加載所有幀
+        for (const auto& path : framePaths) {
+            sf::Texture texture;
+            if (!texture.loadFromFile(path)) {
+                std::cout << "Error loading frame: " << path << std::endl;
+                continue;
+            }
+            frames.push_back(texture);
+        }
+
+        if (!frames.empty()) {
+            sprite.setTexture(frames[0]);
+            
+            // 計算縮放比例以適口
+            float scaleX = windowSize.x / frames[0].getSize().x;
+            float scaleY = windowSize.y / frames[0].getSize().y;
+            scale = sf::Vector2f(scaleX, scaleY);
+            sprite.setScale(scale);
+        }
+    }
+
+    void update(float deltaTime) {
+        if (frames.empty()) return;
+
+        currentTime += deltaTime;
+        if (currentTime >= frameTime) {
+            currentTime = 0;
+            currentFrame = (currentFrame + 1) % frames.size();
+            sprite.setTexture(frames[currentFrame]);
+            sprite.setScale(scale);  // 確保縮放保持不變
+        }
+    }
+
+    void draw(sf::RenderWindow& window) {
+        window.draw(sprite);
+    }
+};
+
 class Game {
 private:
     RenderWindow& window;
     std::vector<Bullet> bullets;
     std::vector<Enemy> enemies;
-    int* killCountPtr;  // 指向擊殺計數的指針
+    int* killCountPtr;
+    int* goldPtr;  // 添加金幣指針
+    std::unique_ptr<AnimatedBackground> background;  // 使用智能指針管理背景
 
 public:
-    Game(RenderWindow& win, int* killCount) : window(win), killCountPtr(killCount) {}
+    Game(RenderWindow& win, int* killCount, int* gold) 
+        : window(win), killCountPtr(killCount), goldPtr(gold) {
+        // 輸出當前工作目錄
+        std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
+        
+        std::vector<std::string> framePaths;
+        for (int i = 1; i <= 24; i++) {
+            char buffer[256];
+            snprintf(buffer, sizeof(buffer), "/Users/cpcap/GTA6/texture/background/frames/frame_%03d.png", i);
+            std::string path = buffer;
+            std::cout << "Trying to load: " << path << std::endl;  // 輸出嘗試加載的路徑
+            framePaths.push_back(path);
+        }
+
+        background = std::make_unique<AnimatedBackground>(
+            framePaths, 
+            0.1f, 
+            sf::Vector2f(window.getSize().x, window.getSize().y)
+        );
+    }
+
+    void update(float deltaTime) {
+        if (background) {
+            background->update(deltaTime);
+        }
+        // ... 其他更新邏輯 ...
+    }
+
+    void drawBackground() {
+        if (background) {
+            background->draw(window);
+        }
+    }
+
+    // 在遊戲主循環中的繪製部分，首先繪製背景
+    void draw() {
+        drawBackground();
+        // ... 繪製其他遊戲元素 ...
+    }
 
     // 添加重置方法
     void reset() {
@@ -84,28 +178,32 @@ public:
 
     // 添加更新方法
     void updateBullets() {
-        // 更新子彈位置
-        for (auto& bullet : bullets) {
-            bullet.update();
-        }
-
-        // 檢查子彈和敵人的碰撞
-        for (auto bulletIt = bullets.begin(); bulletIt != bullets.end();) {
-            bool bulletHit = false;
+        auto bulletIt = bullets.begin();
+        while (bulletIt != bullets.end()) {
+            bulletIt->update();  // 使用 Bullet 類的 update 方法，而不是直接使用 velocity
             
-            for (auto enemyIt = enemies.begin(); enemyIt != enemies.end();) {
+            bool bulletHit = false;
+            auto enemyIt = enemies.begin();
+            
+            while (enemyIt != enemies.end()) {
                 if (bulletIt->shape.getGlobalBounds().intersects(enemyIt->shape.getGlobalBounds())) {
-                    // 子彈擊中敵人
+                    (*killCountPtr)++;
+                    (*goldPtr) += 1000;
+                    
+                    std::cout << "擊中敵人！當前金幣: " << *goldPtr << std::endl;
+                    
                     enemyIt = enemies.erase(enemyIt);
                     bulletHit = true;
-                    (*killCountPtr)++;  // 增加擊殺計數
                     break;
                 } else {
                     ++enemyIt;
                 }
             }
             
-            if (bulletHit || bulletIt->shape.getPosition().y < 0) {
+            // 將 isOutOfBounds 檢查移到 Game 類內部
+            bool outOfBounds = bulletIt->shape.getPosition().y < 0;
+            
+            if (bulletHit || outOfBounds) {
                 bulletIt = bullets.erase(bulletIt);
             } else {
                 ++bulletIt;
@@ -126,12 +224,17 @@ public:
     }
 
     void addEnemy(float x, float y) {
-        // 最後的安全檢查
-        const float BOUNDARY_RIGHT = 1000.f;
+        // 新的敵人邊界
+        const float ENEMY_BOUNDARY_LEFT = 250.f;
+        const float ENEMY_BOUNDARY_RIGHT = 950.f;
         const float ENEMY_WIDTH = 30.f;
         
-        if (x > (BOUNDARY_RIGHT - ENEMY_WIDTH)) {
-            x = BOUNDARY_RIGHT - ENEMY_WIDTH;
+        // 確保敵人在新的邊界內生成
+        if (x < ENEMY_BOUNDARY_LEFT) {
+            x = ENEMY_BOUNDARY_LEFT;
+        }
+        if (x > (ENEMY_BOUNDARY_RIGHT - ENEMY_WIDTH)) {
+            x = ENEMY_BOUNDARY_RIGHT - ENEMY_WIDTH;
         }
 
         Enemy enemy(x, y);
@@ -168,7 +271,7 @@ int main() {
     
     // 加載玩家材質
     Texture playerTexture;
-    if (!playerTexture.loadFromFile("/Users/cpcap/GTA6/texture/player.png")) {
+    if (!playerTexture.loadFromFile("/Users/cpcap/GTA6/texture/character/player.png")) {
         cout << "Error loading player texture!" << endl;
         cout << "Current working directory: " << filesystem::current_path() << endl;
         return -1;
@@ -176,18 +279,21 @@ int main() {
     
     // 創建玩家精靈替代原來的 CircleShape
     Sprite playerSprite(playerTexture);
-    // 設置精靈的原點為中心
+    // 設置精靈原點為中心
     playerSprite.setOrigin(playerTexture.getSize().x / 2.f, playerTexture.getSize().y / 2.f);
     
     float x = BOUNDARY_LEFT + PLAY_AREA_WIDTH/2;  // 在遊戲區域中心
-    float y = 740.f;
+    float y = 730.f;  // 原始值是 740.f，我們可以減小這個值來使角色往上移
+
     playerSprite.setPosition(x, y);
     
     // 在 main 函數中，修改玩家精靈的縮放比例
-    // 將原來的 60.f 改為更大的值，例如 100.f
+    float desiredWidth = 90.f;   // 期望的寬度
+    float desiredHeight = 140.f;  // 期望的高度（可以調整這個值來改變高度）
+
     playerSprite.setScale(
-        100.f / playerTexture.getSize().x,  // 改為 100.f 使玩家更大
-        100.f / playerTexture.getSize().y   // 保持寬高比例一致
+        desiredWidth / playerTexture.getSize().x,
+        desiredHeight / playerTexture.getSize().y
     );
     
     float moveSpeed = 0.2f;
@@ -223,7 +329,7 @@ int main() {
     float maxHealth = 100.f;
     float currentHealth = 100.f;
 
-    // 敵人相關變量
+    // 敵人關變量
     std::vector<Enemy> enemies;
     Clock enemySpawnTimer;  // 用於計時生成敵人
     
@@ -234,12 +340,12 @@ int main() {
 
     // 在創建 Game 實例之前定義 killCount
     int killCount = 0;
+    int gold = 30000;  // 初始金幣
 
     // 載入字體
     sf::Font font;
-    if (!font.loadFromFile("/System/Library/Fonts/Helvetica.ttc")) {
+    if (!font.loadFromFile("arial.ttf")) {
         std::cout << "Error loading font!" << std::endl;
-        return -1;
     }
 
     // 添加計數器文字
@@ -247,11 +353,11 @@ int main() {
     killCountText.setFont(font);
     killCountText.setCharacterSize(24);
     killCountText.setFillColor(sf::Color::White);
-    killCountText.setPosition(10, 10);
+    killCountText.setPosition(10.f, 10.f);
     killCountText.setString("Kills: 0");
 
-    // 創建遊戲實例
-    Game game(window, &killCount);
+    // 建遊戲實例
+    Game game(window, &killCount, &gold);
 
     // 創建遊戲結束文字
     sf::Text gameOverText;
@@ -288,22 +394,6 @@ int main() {
     // 添加敵人生成計時器
     const float enemySpawnInterval = 2.0f;  // 2秒生一個敵人
 
-    // 在 main 函數開始處，window 創建之後添加邊界定義
-    RectangleShape leftBoundary;
-    RectangleShape rightBoundary;
-
-    // 設置邊界的大小
-    leftBoundary.setSize(Vector2f(2.f, 800.f));
-    rightBoundary.setSize(Vector2f(2.f, 800.f));
-
-    // 使用正確的常量設置位置
-    leftBoundary.setPosition(BOUNDARY_LEFT, 0.f);                    // x = 200
-    rightBoundary.setPosition(BOUNDARY_LEFT + PLAY_AREA_WIDTH, 0.f); // x = 1000
-
-    // 設置邊界顏色
-    leftBoundary.setFillColor(Color::White);
-    rightBoundary.setFillColor(Color::White);
-
     // 創建勝利文字
     sf::Text gameWonText;
     gameWonText.setFont(font);
@@ -332,9 +422,11 @@ int main() {
     Clock autoShootTimer;  // 自動發射計時器
     const float autoShootInterval = 0.5f;  // 每0.5秒發射一次，你可以調整這個值
 
-    // 主遊戲循環
-    while (window.isOpen())
-    {
+    sf::Clock clock;  // 添加時間來計算幀時間
+    
+    while (window.isOpen()) {
+        float deltaTime = clock.restart().asSeconds();
+        
         Event event;
         while (window.pollEvent(event))
         {
@@ -346,7 +438,7 @@ int main() {
                 if (event.key.code == Keyboard::J) {
                     killCount++;  // 每按一次J增加一個擊殺數
                     // 更新擊殺數顯示
-                    killCountText.setString("Kills: " + std::to_string(killCount));
+                    killCountText.setString("Kills: " + std::to_string(killCount) + " | Gold: " + std::to_string(gold));
                 }
             }
             
@@ -355,14 +447,19 @@ int main() {
             {
                 if (event.key.code == Keyboard::R)
                 {
-                    // 修改重置邏輯
+                    // 重置遊戲狀態
                     currentHealth = maxHealth;
                     healthBar.setSize(Vector2f(200.f, 20.f));
-                    x = BOUNDARY_LEFT + PLAY_AREA_WIDTH/2;  // 在遊戲區域中心
-                    y = 740.f;
+                    x = BOUNDARY_LEFT + PLAY_AREA_WIDTH/2;
+                    y = 730.f;
                     playerSprite.setPosition(x, y);
-                    game.reset();  // 使用重置方法替代重新創建實例
+                    game.reset();
+                    killCount = 0;  // 重置擊殺數
+                    gold = 30000;   // 重置金幣數量
                     isGameOver = false;
+                    
+                    // 更新顯示文字
+                    killCountText.setString("Kills: 0 | Gold: 30000");
                 }
                 else if (event.key.code == Keyboard::Escape)
                 {
@@ -377,25 +474,29 @@ int main() {
                     currentHealth = std::max(0.f, currentHealth - 10.f);
                     healthBar.setSize(Vector2f((currentHealth/maxHealth) * 200.f, 20.f));
                     
-                    // 如果血量歸零，觸發遊戲結束
+                    // 如果血量歸，觸發遊戲結束
                     if (currentHealth <= 0) {
                         isGameOver = true;
                     }
                 }
             }
 
-            // 添加勝利時的按鍵處理
+            // 添加勝時的按鍵處理
             if (gameWon && event.type == Event::KeyPressed) {
                 if (event.key.code == Keyboard::R) {
-                    // 重置遊戲
+                    // 重置遊戲狀態
                     currentHealth = maxHealth;
                     healthBar.setSize(Vector2f(200.f, 20.f));
-                    x = 600.f - 30.f;
-                    y = 740.f;
+                    x = BOUNDARY_LEFT + PLAY_AREA_WIDTH/2;
+                    y = 730.f;
                     playerSprite.setPosition(x, y);
                     game.reset();
                     killCount = 0;  // 重置擊殺數
+                    gold = 30000;   // 重置金幣數量
                     gameWon = false;
+                    
+                    // 更新顯示文字
+                    killCountText.setString("Kills: 0 | Gold: 30000");
                 }
                 else if (event.key.code == Keyboard::Escape) {
                     window.close();
@@ -403,16 +504,42 @@ int main() {
             }
         }
 
-        // 檢測碰撞後的血量檢查
+        // 在遊戲循環中，修改碰撞檢測的部分
         if (!isInvincible) {
-            for (size_t i = 0; i < game.getEnemies().size(); i++) {
-                if (game.getEnemies()[i].checkCollision(playerSprite)) {
+            auto enemyIt = game.getEnemies().begin();
+            while (enemyIt != game.getEnemies().end()) {
+                if (enemyIt->checkCollision(playerSprite)) {
+                    // 扣血
                     currentHealth = std::max(0.f, currentHealth - 10.f);
                     healthBar.setSize(Vector2f((currentHealth/maxHealth) * 200.f, 20.f));
+                    
+                    // 設置無敵時間
                     isInvincible = true;
                     invincibilityTimer.restart();
+                    
+                    // 增加擊殺數和金幣
                     killCount++;
+                    gold += 1000;  // 每擊敗一個敵人增加 1000 金幣
+                    
+                    // 立即更新 UI 文字
+                    killCountText.setString("Kills: " + std::to_string(killCount) + " | Gold: " + std::to_string(gold));
+                    
+                    // 移除敵人
+                    enemyIt = game.getEnemies().erase(enemyIt);
+
+                    // 檢查是否達到勝利條件
+                    if (killCount >= 10) {
+                        gameWon = true;
+                    }
+                    
+                    // 檢查是否死亡
+                    if (currentHealth <= 0) {
+                        isGameOver = true;
+                    }
+                    
                     break;
+                } else {
+                    ++enemyIt;
                 }
             }
         }
@@ -426,9 +553,8 @@ int main() {
 
         // 修改遊戲狀態檢查的邏輯
         if (!isGameOver && !gameWon) {  // 確保兩個狀態互斥
-            // 繪製邊界（在繪製其他物件之前）
-            window.draw(leftBoundary);
-            window.draw(rightBoundary);
+            game.update(deltaTime);  // 更新遊戲狀態，包括背景動畫
+            game.drawBackground();   // 繪製背景
             
             // 繪製敵人
             for (const auto& enemy : game.getEnemies()) {
@@ -441,7 +567,7 @@ int main() {
                 window.draw(bullet.shape);
             }
             
-            // 繪製血條
+            // 繪製條
             window.draw(healthBarBackground);
             window.draw(healthBar);
 
@@ -465,14 +591,17 @@ int main() {
 
             // 修改敵人生成邏輯
             if (enemySpawnTimer.getElapsedTime().asSeconds() >= enemySpawnInterval) {
-                // 計算生成範圍（確保不超過1000）
-                float randomX = BOUNDARY_LEFT + 
-                    (static_cast<float>(rand()) / RAND_MAX) * 
-                    (BOUNDARY_RIGHT - BOUNDARY_LEFT - ENEMY_WIDTH);
+                // 使用新的敵人邊界
+                const float ENEMY_BOUNDARY_LEFT = 250.f;
+                const float ENEMY_BOUNDARY_RIGHT = 950.f;
+                const float ENEMY_WIDTH = 30.f;
                 
-                // 最後的安全檢查
-                if (randomX > (BOUNDARY_RIGHT - ENEMY_WIDTH)) {
-                    randomX = BOUNDARY_RIGHT - ENEMY_WIDTH;
+                float randomX = ENEMY_BOUNDARY_LEFT + 
+                    (static_cast<float>(rand()) / RAND_MAX) * 
+                    (ENEMY_BOUNDARY_RIGHT - ENEMY_BOUNDARY_LEFT - ENEMY_WIDTH);
+                
+                if (randomX > (ENEMY_BOUNDARY_RIGHT - ENEMY_WIDTH)) {
+                    randomX = ENEMY_BOUNDARY_RIGHT - ENEMY_WIDTH;
                 }
                 
                 std::cout << "生成敵人位置X: " << randomX << std::endl;
@@ -519,21 +648,26 @@ int main() {
             }
 
             // 更新並繪製擊殺數
-            killCountText.setString("Kills: " + std::to_string(killCount));
+            killCountText.setString("Kills: " + std::to_string(killCount) + " | Gold: " + std::to_string(gold));
             window.draw(killCountText);
         }
         else if (gameWon) {
             // 繪製勝利畫面
             window.draw(gameWonText);
             window.draw(victoryPromptText);
-            window.draw(killCountText);
+            // 不繪製擊殺數和金幣
         }
         else if (isGameOver) {
             // 繪製遊戲結束畫面
             window.draw(gameOverText);
             window.draw(promptText);
-            window.draw(killCountText);
+            // 不繪製擊殺數和金幣
         }
+
+        // 在遊戲結束畫面中顯示金幣數量
+        sf::Text goldText("Gold: " + std::to_string(gold), font, 30);
+        goldText.setFillColor(sf::Color::Black);
+        goldText.setPosition(10, 40);  // 調整位置以顯示金幣
 
         window.display();
     }
